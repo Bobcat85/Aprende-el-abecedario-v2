@@ -1,94 +1,91 @@
-import pygame
-import os
-import sys
-import pyttsx3
-import random
 import math
+import os
+import random
+import string
+import sys
+from functools import lru_cache
 
-# Inicializar pygame y pyttsx3
+import pygame
+
+try:
+    import pyttsx3
+except ImportError:   # en Android (o sin instalar) el juego usa solo los audios pregrabados
+    pyttsx3 = None
+
+# ============================
+# Inicialización
+# ============================
 pygame.init()
-engine = pyttsx3.init()
+engine = pyttsx3.init() if pyttsx3 else None   # voz de respaldo cuando no hay audio pregrabado
 
-# Música de fondo
-ruta_musica = os.path.join(os.path.dirname(__file__), "assets", "sonidos", "musica_fondo.mp3")
+BASE = os.path.dirname(__file__)
+ruta_sonidos = os.path.join(BASE, "assets", "sonidos")
+ruta_audios = os.path.join(BASE, "assets", "audios")      # voces pregrabadas (gTTS)
+ruta_img = os.path.join(BASE, "assets", "imagenes")
+RUTA_FUENTE = os.path.join(BASE, "assets", "fuentes", "Baloo2.ttf")
+
+# ---- Estado global del juego ----
+palabra_mostrada = ""       # la palabra se muestra solo cuando se acierta
+modo_libre = False          # sin vidas y con todos los niveles abiertos (práctica sin presión)
+audio_activado = True       # interruptor maestro: música, efectos y voz
+vidas, indice, datos_nivel = 5, 0, []   # nivel en curso (los lee mostrar_pantalla)
+
+# ---- Audio ----
+VOLUMEN_MUSICA, VOLUMEN_EFECTOS = 0.05, 0.7
+ruta_musica = os.path.join(ruta_sonidos, "musica_fondo.mp3")
 if os.path.exists(ruta_musica):
     pygame.mixer.music.load(ruta_musica)
-    pygame.mixer.music.set_volume(0.05)  # Volumen de 0.0 a 1.0
-    pygame.mixer.music.play(-1)  # 🔁 -1 para repetir infinitamente
-
-
-# Cargar sonidos
-ruta_sonidos = os.path.join(os.path.dirname(__file__), "assets", "sonidos")
+    pygame.mixer.music.play(-1)  # -1 = repetir infinitamente
 sonido_correcto = pygame.mixer.Sound(os.path.join(ruta_sonidos, "correcto.wav"))
 sonido_error = pygame.mixer.Sound(os.path.join(ruta_sonidos, "error.wav"))
-
-# Ruta de audios de voz (pregrabados con gTTS)
-ruta_audios = os.path.join(os.path.dirname(__file__), "assets", "audios")
-
-# Ajustar volumen (opcional)
-VOLUMEN_MUSICA_NORMAL = 0.05
-VOLUMEN_EFECTOS_NORMAL = 0.7
-sonido_correcto.set_volume(VOLUMEN_EFECTOS_NORMAL)
-sonido_error.set_volume(VOLUMEN_EFECTOS_NORMAL)
-
-# Canal específico para efectos
 canal_efectos = pygame.mixer.Channel(1)
+canal_voz = pygame.mixer.Channel(0)   # la voz va en su propio canal: así no corta la música de fondo
+_cache_voces = {}                     # ruta -> Sound ya cargado (cada mp3 se lee una sola vez)
 
 
 def aplicar_estado_audio():
-    """
-    Aplica el estado actual de 'audio_activado' a la música y los
-    efectos de sonido. La voz (hablar) se controla por separado, ya
-    que además de pygame usa pyttsx3 (motor de voz del sistema).
-    """
-    if audio_activado:
-        pygame.mixer.music.set_volume(VOLUMEN_MUSICA_NORMAL)
-        sonido_correcto.set_volume(VOLUMEN_EFECTOS_NORMAL)
-        sonido_error.set_volume(VOLUMEN_EFECTOS_NORMAL)
-    else:
-        pygame.mixer.music.set_volume(0)
-        sonido_correcto.set_volume(0)
-        sonido_error.set_volume(0)
+    """Silencia o restaura música y efectos según 'audio_activado' (la voz se controla en reproducir_audio)."""
+    factor = 1 if audio_activado else 0
+    pygame.mixer.music.set_volume(VOLUMEN_MUSICA * factor)
+    for efecto in (sonido_correcto, sonido_error):
+        efecto.set_volume(VOLUMEN_EFECTOS * factor)
 
-# Reloj para limitar los fotogramas por segundo en los bucles que
-# esperan clics del jugador (evita que el juego use CPU al 100% sin
-# necesidad cuando no está pasando nada en pantalla)
-reloj = pygame.time.Clock()
 
-# Pantalla completa
+aplicar_estado_audio()
+
+# ---- Pantalla completa ----
+reloj = pygame.time.Clock()  # limita los FPS para no gastar CPU de más
 info = pygame.display.Info()
 ANCHO, ALTO = info.current_w, info.current_h
 pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.FULLSCREEN)
 pygame.display.set_caption("Juego del Abecedario")
 
 # ============================
-# Paleta de colores unificada
+# Paleta de colores unificada (tonos pastel que combinan con el fondo)
 # ============================
-# Tonos pastel pensados para combinar con el fondo (cielo/pasto) y para
-# reducir el contraste agresivo de colores muy saturados. Se usan en
-# toda la interfaz (botones, interruptores, letras) en vez de colores
-# sueltos definidos en cada pantalla.
 PALETA = {
-    "verde_activo":       (108, 189, 134),   # Botones/estados activados, niveles desbloqueados
-    "verde_activo_hover": (128, 206, 153),
-    "azul_principal":     (94, 158, 214),    # Botón Jugar, interruptor de sonido
+    "verde_activo":         (108, 189, 134),   # estados activados, niveles desbloqueados
+    "verde_activo_hover":   (128, 206, 153),
+    "azul_principal":       (94, 158, 214),    # botón Jugar, interruptor de sonido
     "azul_principal_hover": (118, 178, 230),
-    "rosa_suave":         (224, 122, 122),   # Botón Salir (llamativo pero no agresivo)
-    "rosa_suave_hover":    (235, 146, 146),
-    "gris_bloqueado":     (176, 176, 176),   # Niveles bloqueados, estados inactivos
-    "dorado_completado":  (232, 192, 90),    # Borde de nivel completado
-    "texto_oscuro":       (60, 60, 70),      # Texto sobre fondos claros
-    "texto_claro":        (255, 255, 255),   # Texto sobre fondos de color
+    "rosa_suave":           (224, 122, 122),   # botón Salir
+    "rosa_suave_hover":     (235, 146, 146),
+    "gris_bloqueado":       (176, 176, 176),   # niveles bloqueados, estados inactivos
+    "dorado_completado":    (232, 192, 90),    # borde de nivel completado
+    "texto_oscuro":         (60, 60, 70),
+    "texto_claro":          (255, 255, 255),
+    "texto_bloqueado":      (90, 90, 90),
+    "azul_aviso":           (0, 102, 204),     # avisos e infinito del modo libre
 }
 
-# Colores pastel para las letras grandes (antes eran colores muy saturados)
+# Colores pastel para las letras grandes
 COLORES_LETRAS = [
-    (224, 122, 122),   # Rojo pastel
-    (108, 189, 134),   # Verde pastel
-    (94, 158, 214),    # Azul pastel
-    (232, 160, 96),    # Naranja pastel
-    (170, 128, 196),   # Morado pastel
-    (232, 192, 90),    # Amarillo/dorado pastel
+    (224, 122, 122),   # rojo
+    (108, 189, 134),   # verde
+    (94, 158, 214),    # azul
+    (232, 160, 96),    # naranja
+    (170, 128, 196),   # morado
+    (232, 192, 90),    # amarillo
 ]
 
 # Variable global para mostrar la palabra correcta solo cuando aciertas
@@ -101,9 +98,6 @@ modo_libre = False
 # Audio activado: interruptor maestro de silencio (música, efectos y voz)
 audio_activado = True
 
-# ============================
-# Fuente propia del juego
-# ============================
 # Se incluye el archivo .ttf dentro del proyecto para que el juego se
 # vea igual en Windows, Mac o Linux, en vez de depender de que el
 # sistema operativo tenga "Comic Sans MS" instalada.
