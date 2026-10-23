@@ -1,91 +1,94 @@
-import math
-import os
-import random
-import string
-import sys
-from functools import lru_cache
-
 import pygame
+import os
+import sys
+import pyttsx3
+import random
+import math
 
-try:
-    import pyttsx3
-except ImportError:   # en Android (o sin instalar) el juego usa solo los audios pregrabados
-    pyttsx3 = None
-
-# ============================
-# Inicialización
-# ============================
+# Inicializar pygame y pyttsx3
 pygame.init()
-engine = pyttsx3.init() if pyttsx3 else None   # voz de respaldo cuando no hay audio pregrabado
+engine = pyttsx3.init()
 
-BASE = os.path.dirname(__file__)
-ruta_sonidos = os.path.join(BASE, "assets", "sonidos")
-ruta_audios = os.path.join(BASE, "assets", "audios")      # voces pregrabadas (gTTS)
-ruta_img = os.path.join(BASE, "assets", "imagenes")
-RUTA_FUENTE = os.path.join(BASE, "assets", "fuentes", "Baloo2.ttf")
-
-# ---- Estado global del juego ----
-palabra_mostrada = ""       # la palabra se muestra solo cuando se acierta
-modo_libre = False          # sin vidas y con todos los niveles abiertos (práctica sin presión)
-audio_activado = True       # interruptor maestro: música, efectos y voz
-vidas, indice, datos_nivel = 5, 0, []   # nivel en curso (los lee mostrar_pantalla)
-
-# ---- Audio ----
-VOLUMEN_MUSICA, VOLUMEN_EFECTOS = 0.05, 0.7
-ruta_musica = os.path.join(ruta_sonidos, "musica_fondo.mp3")
+# Música de fondo
+ruta_musica = os.path.join(os.path.dirname(__file__), "assets", "sonidos", "musica_fondo.mp3")
 if os.path.exists(ruta_musica):
     pygame.mixer.music.load(ruta_musica)
-    pygame.mixer.music.play(-1)  # -1 = repetir infinitamente
+    pygame.mixer.music.set_volume(0.05)  # Volumen de 0.0 a 1.0
+    pygame.mixer.music.play(-1)  # 🔁 -1 para repetir infinitamente
+
+
+# Cargar sonidos
+ruta_sonidos = os.path.join(os.path.dirname(__file__), "assets", "sonidos")
 sonido_correcto = pygame.mixer.Sound(os.path.join(ruta_sonidos, "correcto.wav"))
 sonido_error = pygame.mixer.Sound(os.path.join(ruta_sonidos, "error.wav"))
+
+# Ruta de audios de voz (pregrabados con gTTS)
+ruta_audios = os.path.join(os.path.dirname(__file__), "assets", "audios")
+
+# Ajustar volumen (opcional)
+VOLUMEN_MUSICA_NORMAL = 0.05
+VOLUMEN_EFECTOS_NORMAL = 0.7
+sonido_correcto.set_volume(VOLUMEN_EFECTOS_NORMAL)
+sonido_error.set_volume(VOLUMEN_EFECTOS_NORMAL)
+
+# Canal específico para efectos
 canal_efectos = pygame.mixer.Channel(1)
-canal_voz = pygame.mixer.Channel(0)   # la voz va en su propio canal: así no corta la música de fondo
-_cache_voces = {}                     # ruta -> Sound ya cargado (cada mp3 se lee una sola vez)
 
 
 def aplicar_estado_audio():
-    """Silencia o restaura música y efectos según 'audio_activado' (la voz se controla en reproducir_audio)."""
-    factor = 1 if audio_activado else 0
-    pygame.mixer.music.set_volume(VOLUMEN_MUSICA * factor)
-    for efecto in (sonido_correcto, sonido_error):
-        efecto.set_volume(VOLUMEN_EFECTOS * factor)
+    """
+    Aplica el estado actual de 'audio_activado' a la música y los
+    efectos de sonido. La voz (hablar) se controla por separado, ya
+    que además de pygame usa pyttsx3 (motor de voz del sistema).
+    """
+    if audio_activado:
+        pygame.mixer.music.set_volume(VOLUMEN_MUSICA_NORMAL)
+        sonido_correcto.set_volume(VOLUMEN_EFECTOS_NORMAL)
+        sonido_error.set_volume(VOLUMEN_EFECTOS_NORMAL)
+    else:
+        pygame.mixer.music.set_volume(0)
+        sonido_correcto.set_volume(0)
+        sonido_error.set_volume(0)
 
+# Reloj para limitar los fotogramas por segundo en los bucles que
+# esperan clics del jugador (evita que el juego use CPU al 100% sin
+# necesidad cuando no está pasando nada en pantalla)
+reloj = pygame.time.Clock()
 
-aplicar_estado_audio()
-
-# ---- Pantalla completa ----
-reloj = pygame.time.Clock()  # limita los FPS para no gastar CPU de más
+# Pantalla completa
 info = pygame.display.Info()
 ANCHO, ALTO = info.current_w, info.current_h
 pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.FULLSCREEN)
 pygame.display.set_caption("Juego del Abecedario")
 
 # ============================
-# Paleta de colores unificada (tonos pastel que combinan con el fondo)
+# Paleta de colores unificada
 # ============================
+# Tonos pastel pensados para combinar con el fondo (cielo/pasto) y para
+# reducir el contraste agresivo de colores muy saturados. Se usan en
+# toda la interfaz (botones, interruptores, letras) en vez de colores
+# sueltos definidos en cada pantalla.
 PALETA = {
-    "verde_activo":         (108, 189, 134),   # estados activados, niveles desbloqueados
-    "verde_activo_hover":   (128, 206, 153),
-    "azul_principal":       (94, 158, 214),    # botón Jugar, interruptor de sonido
+    "verde_activo":       (108, 189, 134),   # Botones/estados activados, niveles desbloqueados
+    "verde_activo_hover": (128, 206, 153),
+    "azul_principal":     (94, 158, 214),    # Botón Jugar, interruptor de sonido
     "azul_principal_hover": (118, 178, 230),
-    "rosa_suave":           (224, 122, 122),   # botón Salir
-    "rosa_suave_hover":     (235, 146, 146),
-    "gris_bloqueado":       (176, 176, 176),   # niveles bloqueados, estados inactivos
-    "dorado_completado":    (232, 192, 90),    # borde de nivel completado
-    "texto_oscuro":         (60, 60, 70),
-    "texto_claro":          (255, 255, 255),
-    "texto_bloqueado":      (90, 90, 90),
-    "azul_aviso":           (0, 102, 204),     # avisos e infinito del modo libre
+    "rosa_suave":         (224, 122, 122),   # Botón Salir (llamativo pero no agresivo)
+    "rosa_suave_hover":    (235, 146, 146),
+    "gris_bloqueado":     (176, 176, 176),   # Niveles bloqueados, estados inactivos
+    "dorado_completado":  (232, 192, 90),    # Borde de nivel completado
+    "texto_oscuro":       (60, 60, 70),      # Texto sobre fondos claros
+    "texto_claro":        (255, 255, 255),   # Texto sobre fondos de color
 }
 
-# Colores pastel para las letras grandes
+# Colores pastel para las letras grandes (antes eran colores muy saturados)
 COLORES_LETRAS = [
-    (224, 122, 122),   # rojo
-    (108, 189, 134),   # verde
-    (94, 158, 214),    # azul
-    (232, 160, 96),    # naranja
-    (170, 128, 196),   # morado
-    (232, 192, 90),    # amarillo
+    (224, 122, 122),   # Rojo pastel
+    (108, 189, 134),   # Verde pastel
+    (94, 158, 214),    # Azul pastel
+    (232, 160, 96),    # Naranja pastel
+    (170, 128, 196),   # Morado pastel
+    (232, 192, 90),    # Amarillo/dorado pastel
 ]
 
 # Variable global para mostrar la palabra correcta solo cuando aciertas
@@ -98,6 +101,9 @@ modo_libre = False
 # Audio activado: interruptor maestro de silencio (música, efectos y voz)
 audio_activado = True
 
+# ============================
+# Fuente propia del juego
+# ============================
 # Se incluye el archivo .ttf dentro del proyecto para que el juego se
 # vea igual en Windows, Mac o Linux, en vez de depender de que el
 # sistema operativo tenga "Comic Sans MS" instalada.
@@ -115,6 +121,128 @@ def cargar_fuente(tamaño, bold=True):
         fuente.set_bold(bold)
         return fuente
     return pygame.font.SysFont("Comic Sans MS", tamaño, bold=bold)
+
+# ============================
+# Utilidades generales
+# ============================
+@lru_cache(maxsize=None)
+def cargar_fuente(tamaño, bold=True):
+    """
+    Fuente propia del juego (Baloo2, incluida en assets/fuentes para que se vea igual en
+    Windows, Mac y Linux). Si falta el archivo usa Comic Sans del sistema. Cada tamaño
+    se crea una sola vez (lru_cache), así que se puede llamar en cada fotograma.
+    """
+    if os.path.exists(RUTA_FUENTE):
+        fuente = pygame.font.Font(RUTA_FUENTE, tamaño)
+        fuente.set_bold(bold)
+        return fuente
+    return pygame.font.SysFont("Comic Sans MS", tamaño, bold=bold)
+
+
+def salir():
+    pygame.quit()
+    sys.exit()
+
+
+def eventos():
+    """Entrega los eventos pendientes y cierra el juego si se cierra la ventana."""
+    for evento in pygame.event.get():
+        if evento.type == pygame.QUIT:
+            salir()
+        yield evento
+
+
+def pausa_activa(ms):
+    """Espera sin congelar la ventana: atiende el cierre y descarta los clics acumulados."""
+    espera, restante = pygame.time.Clock(), ms
+    while restante > 0:
+        for _ in eventos():
+            pass
+        restante -= espera.tick(60)
+
+
+def reproducir_audio(ruta, esperar=True):
+    """
+    Reproduce un mp3 pregrabado (respetando el interruptor de sonido). Con esperar=True
+    no regresa hasta que termina, sin congelar la ventana.
+    Devuelve True si el archivo existe, False si no (el llamador usa entonces la voz de respaldo).
+    """
+    if not os.path.exists(ruta):
+        return False
+    if not audio_activado:
+        return True
+    if ruta not in _cache_voces:
+        _cache_voces[ruta] = pygame.mixer.Sound(ruta)
+    canal_voz.play(_cache_voces[ruta])
+    espera = pygame.time.Clock()
+    while esperar and canal_voz.get_busy():
+        for _ in eventos():
+            pass
+        espera.tick(30)
+    return True
+
+
+def _nombre_audio(texto):
+    """Nombre del mp3 pregrabado que corresponde a la frase, o None si no hay."""
+    bajo = texto.lower()
+    if texto.startswith("¿Cuál imagen empieza con la letra "):
+        return f"pregunta_{texto.split('letra ')[1].replace('?', '')}.mp3"
+    if texto.startswith("¡Correcto!"):
+        partes = texto.replace("¡Correcto! ", "").split(" de ")
+        return f"correcto_{partes[0].strip()}_{partes[1].strip()}.mp3" if len(partes) == 2 else None
+    if bajo == "intenta otra vez":
+        return "intenta_otra_vez.mp3"
+    if "se acabaron tus vidas" in bajo:
+        return "vidas_terminadas.mp3"
+    if "felicidades" in bajo:
+        return "felicidades.mp3"
+    if texto.strip().isalnum():  # palabra suelta
+        return texto.strip() + ".mp3"
+    return None
+
+
+def hablar(texto):
+    """Dice la frase con su mp3 pregrabado; si no existe, con la voz del sistema (pyttsx3)."""
+    if not audio_activado:
+        return
+    try:
+        nombre = _nombre_audio(texto)
+        if nombre and reproducir_audio(os.path.join(ruta_audios, nombre)):
+            return
+    except Exception as e:
+        print(f"Error al reproducir voz: {e}")
+    if engine:
+        engine.say(texto)
+        engine.runAndWait()
+
+
+def blit_en(superficie, **ancla):
+    """Dibuja una superficie anclada por su centro, midtop, etc.: blit_en(txt, center=(x, y))."""
+    pantalla.blit(superficie, superficie.get_rect(**ancla))
+
+
+def dibujar_boton(rect, texto, color, fuente, color_texto=PALETA["texto_claro"], radio=25,
+                  borde=0, color_borde=(0, 0, 0)):
+    """Botón redondeado con el texto centrado (y borde opcional)."""
+    pygame.draw.rect(pantalla, color, rect, border_radius=radio)
+    if borde:
+        pygame.draw.rect(pantalla, color_borde, rect, borde, border_radius=radio)
+    if texto:
+        blit_en(fuente.render(texto, True, color_texto), center=rect.center)
+
+
+def color_hover(nombre, rect):
+    """Color de la paleta, en su versión 'hover' si el mouse está sobre el botón."""
+    return PALETA[nombre + "_hover"] if rect.collidepoint(pygame.mouse.get_pos()) else PALETA[nombre]
+
+
+def dibujar_interruptor(rect, texto, color, icono, **kw_icono):
+    """Botón de encendido/apagado: ícono + texto centrados juntos dentro del botón."""
+    dibujar_boton(rect, "", color, None, borde=3)
+    render = cargar_fuente(32).render(texto, True, PALETA["texto_claro"])
+    x0 = rect.centerx - (34 + 14 + render.get_width()) // 2   # 34 = ancho del ícono, 14 = espacio
+    icono(pantalla, x0 + 17, rect.centery, color=PALETA["texto_claro"], **kw_icono)
+    pantalla.blit(render, (x0 + 48, rect.centery - render.get_height() // 2))
 
 
 # Fuentes
