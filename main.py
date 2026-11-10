@@ -12,9 +12,7 @@ try:
 except ImportError:   # en Android (o sin instalar) el juego usa solo los audios pregrabados
     pyttsx3 = None
 
-# ============================
 # Inicialización
-# ============================
 pygame.init()
 engine = pyttsx3.init() if pyttsx3 else None   # voz de respaldo cuando no hay audio pregrabado
 
@@ -60,9 +58,7 @@ ANCHO, ALTO = info.current_w, info.current_h
 pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.FULLSCREEN)
 pygame.display.set_caption("Juego del Abecedario")
 
-# ============================
 # Paleta de colores unificada (tonos pastel que combinan con el fondo)
-# ============================
 PALETA = {
     "verde_activo":         (108, 189, 134),   # estados activados, niveles desbloqueados
     "verde_activo_hover":   (128, 206, 153),
@@ -89,9 +85,7 @@ COLORES_LETRAS = [
 ]
 
 
-# ============================
 # Utilidades generales
-# ============================
 @lru_cache(maxsize=None)
 def cargar_fuente(tamaño, bold=True):
     """
@@ -153,10 +147,10 @@ def _nombre_audio(texto):
     """Nombre del mp3 pregrabado que corresponde a la frase, o None si no hay."""
     bajo = texto.lower()
     if texto.startswith("¿Cuál imagen empieza con la letra "):
-        return f"pregunta_{texto.split('letra ')[1].replace('?', '')}.mp3"
+        return f"pregunta_{texto.split('letra ')[1].replace('?', '').strip()[0].upper()}.mp3"   # "Bb" -> pregunta_B.mp3
     if texto.startswith("¡Correcto!"):
         partes = texto.replace("¡Correcto! ", "").split(" de ")
-        return f"correcto_{partes[0].strip()}_{partes[1].strip()}.mp3" if len(partes) == 2 else None
+        return f"correcto_{partes[0].strip()[0].upper()}_{partes[1].strip()}.mp3" if len(partes) == 2 else None   # correcto_B_ballena.mp3
     if bajo == "intenta otra vez":
         return "intenta_otra_vez.mp3"
     if "se acabaron tus vidas" in bajo:
@@ -244,7 +238,7 @@ def cargar_avatar(nombre):
 
 AVATARES = {estado: cargar_avatar(f"avatar_{estado}.png") for estado in ("feliz", "triste", "animo")}
 
-_cache_imagenes = {}  # (nombre, tamaño) -
+_cache_imagenes = {}  # (nombre, tamaño) -> imagen circular ya procesada
 
 
 def cargar_imagen(nombre, tamaño=(300, 300)):
@@ -268,6 +262,8 @@ def cargar_imagen(nombre, tamaño=(300, 300)):
         print(f"Error cargando imagen {ruta}: {e}")
         return None
 
+# Datos: una línea por letra (imagen=palabra, ...). Para agregar una palabra basta
+# con sumar "archivo.png=palabra" a la línea de su letra.
 _TABLA_LETRAS = """
 Aa | A_abeja.png=abeja, A_avion.png=avión, A_arbol.png=árbol
 Bb | B_ballena.png=ballena, B_bicicleta.png=bicicleta, B_botas.png=botas
@@ -283,7 +279,7 @@ Kk | K_kiosco.png=kiosco, K_koala.png=koala, K_kiwi.png=kiwi
 Ll | L_leon.png=león, L_lapiz.png=lápiz, L_lampara.png=lámpara
 Mm | M_mesa.png=mesa, M_mariposa.png=mariposa, M_manzana.png=manzana
 Nn | N_nube.png=nube, N_nido.png=nido, N_naranja.png=naranja
-Ññ | Ñ_ñu.png=ñu, Ñ_ñame.png=ñame, Ñ_ñandu.png=ñandú
+Ññ | N_nu.png=ñu, N_name.png=ñame, N_nandu.png=ñandú
 Oo | O_oveja.png=oveja, O_ojo.png=ojo, O_olla.png=olla
 Pp | P_perro.png=perro, P_pera.png=pera, P_peine.png=peine
 Qq | Q_querubin.png=querubín, Q_queso.png=queso, Q_quirofano.png=quirófano
@@ -510,11 +506,9 @@ def pantalla_fin_juego(titulo="¡Se acabaron tus vidas!", color_titulo=(200, 0, 
                     return "reintentar"
 
 # Minijuegos
-def minijuego_arrastrar_letra_opciones(letras_aprendidas, imagen_correcta, palabra):
-    """Repaso: arrastrar la imagen hasta la letra con la que empieza."""
-    inicial = imagen_correcta[0].upper()   # "A_abeja.png" -> "A"
-    # La opción correcta es la letra del nivel que corresponde a la imagen (ej. "Aa")
-    correcta = next((l for l in letras_aprendidas if l[0].upper() == inicial), inicial)
+def minijuego_arrastrar_letra_opciones(letras_aprendidas, correcta, imagen_correcta, palabra):
+    """Repaso: arrastrar la imagen hasta la letra con la que empieza (correcta = "Aa", "Ññ"...)."""
+    inicial = correcta[0].upper()   # "Ññ" -> "Ñ" (así se llaman los audios minijuego_Ñ_ñu.mp3)
     opciones = random.sample(letras_aprendidas, min(3, len(letras_aprendidas)))
     if correcta not in opciones:
         opciones[random.randrange(len(opciones))] = correcta
@@ -561,6 +555,7 @@ def minijuego_arrastrar_letra_opciones(letras_aprendidas, imagen_correcta, palab
                                 hablar("¡Muy bien!")
                             terminado = True
                         else:
+                            rect_imagen.topleft = (100, ALTO // 2)   # la imagen vuelve a su sitio
                             hablar("Intenta otra vez")
             elif e.type == pygame.MOUSEMOTION and arrastrando:
                 rect_imagen.center = e.pos
@@ -626,8 +621,6 @@ def minijuego_rompecabezas_letra(info_letra):
     if not reproducir_audio(os.path.join(ruta_audios, "muy_bien.mp3")):
         hablar(f"¡Excelente! Armaste la letra {letra}")
     pausa_activa(1200)
-
-
 
 # Pantalla de juego
 RONDA_VACIA = {"opciones": [], "imagen": "", "color": (0, 0, 0), "posiciones": []}
@@ -825,8 +818,9 @@ def jugar_nivel(nivel_idx):
                     ronda = juego_letra(datos_nivel[indice])
                     continue
                 # Última letra: minijuego de repaso con una imagen del nivel y se termina
-                objeto = random.choice(random.choice(datos_nivel)["correctas"])
-                minijuego_arrastrar_letra_opciones([d["letra"] for d in datos_nivel], objeto["imagen"], objeto["palabra"])
+                info = random.choice(datos_nivel)
+                objeto = random.choice(info["correctas"])
+                minijuego_arrastrar_letra_opciones([d["letra"] for d in datos_nivel], info["letra"], objeto["imagen"], objeto["palabra"])
                 terminar_nivel(nivel_idx)
                 return False
 
@@ -845,9 +839,7 @@ def jugar_nivel(nivel_idx):
             pausa_activa(1500)
 
 
-# ============================
 # Bucle principal
-# ============================
 def main():
     reintentar = None   # si el jugador eligió "Reintentar", índice del nivel a repetir sin pasar por los menús
     while True:
