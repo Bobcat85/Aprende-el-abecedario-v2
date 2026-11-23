@@ -411,3 +411,424 @@ async function pantallaInicio() {
     await frame();
   }
 }
+
+
+/** Divide el texto en líneas que caben en el ancho dado. */
+function envolver(txt, size, maxAncho, bold) {
+  const lineas = []; let actual = "";
+  for (const palabra of txt.split(" ")) {
+    const prueba = (actual + " " + palabra).trim();
+    if (anchoTexto(prueba, size, bold) <= maxAncho) actual = prueba;
+    else { if (actual) lineas.push(actual); actual = palabra; }
+  }
+  if (actual) lineas.push(actual);
+  return lineas;
+}
+
+async function pantallaInstrucciones() {
+  const panel = { x: (W - 1000) / 2, y: 170, w: 1000, h: 360 };
+  const bIniciar = { x: W / 2 - 210, y: panel.y + panel.h + 20, w: 420, h: 100 };
+  const instrucciones = [
+    "1. Mira la letra que aparece arriba.",
+    "2. Toca la imagen que EMPIECE con esa letra.",
+    "3. Si aciertas, escucharás la palabra y sigues avanzando.",
+    "4. Si fallas, perderás un corazón (en Modo libre no pasa nada).",
+    "¡Diviértete aprendiendo!",
+  ];
+  const lineas = instrucciones.flatMap((l) => envolver(l, 40, panel.w - 48, false));
+
+  while (true) {
+    dibujarFondo();
+    texto("Instrucciones", W / 2, 95, { size: 100, align: "center", base: "middle" });
+    ctx.globalAlpha = 240 / 255;
+    rectRedondo(panel, 30); ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 4; ctx.strokeStyle = "#000"; rectRedondo(panel, 30); ctx.stroke();
+    lineas.forEach((l, i) => texto(l, panel.x + 24, panel.y + 20 + i * 54, { size: 40, bold: false }));
+    boton(bIniciar, "¡Iniciar!", colorHover("azul_principal", bIniciar));
+
+    for (const e of eventos()) if (e.t === "down" && dentro(bIniciar, e)) return;
+    await frame();
+  }
+}
+
+/** Se muestra al perder todas las vidas. Devuelve "reintentar" o "menu". */
+async function pantallaFinJuego() {
+  const x = W / 2 - 210;
+  const botones = [{ r: { x, y: H / 2 + 20, w: 420, h: 100 }, txt: "Reintentar", color: "verde_activo", accion: "reintentar" },
+                   { r: { x, y: H / 2 + 150, w: 420, h: 100 }, txt: "Menú principal", color: "azul_principal", accion: "menu" }];
+  const avatar = avatares.triste;
+  while (true) {
+    dibujarFondo();
+    let yTitulo = 30;
+    if (avatar) { ctx.drawImage(avatar, W / 2 - 125, 30); yTitulo += 250; }
+    texto("¡Se acabaron tus vidas!", W / 2, yTitulo, { size: 80, color: rgb(200, 0, 0), align: "center" });
+    for (const b of botones) boton(b.r, b.txt, colorHover(b.color, b.r), { size: 55 });
+    for (const e of eventos()) {
+      if (e.t === "down") for (const b of botones) if (dentro(b.r, e)) return b.accion;
+      if (e.t === "esc") return "menu";
+    }
+    await frame();
+  }
+}
+
+// ============================
+// Niveles
+// ============================
+// Niveles 1-6: las 27 letras por grupos (cada nivel se desbloquea al completar el anterior).
+// Niveles 7-8: rompecabezas con 6 letras cada uno (siempre disponibles).
+const GRUPOS_LETRAS = [["A - E", 0, 5], ["F - J", 5, 10], ["K - Ñ", 10, 15], ["O - S", 15, 20], ["T - W", 20, 24], ["X - Z", 24, 27]];
+const LETRAS_ROMPECABEZAS = [[0, 5, 10, 15, 20, 24], [2, 7, 12, 17, 22, 25]];   // posiciones dentro de 'datos'
+const NIVELES = GRUPOS_LETRAS.map(([rango, a, b], n) => ({ nombre: `Nivel ${n + 1}: ${rango}`, datos: datos.slice(a, b) }));
+LETRAS_ROMPECABEZAS.forEach((letras, k) => NIVELES.push({ nombre: `Nivel ${7 + k}: Rompecabezas ${k + 1}`, tipo: "rompecabezas", datos: letras.map((i) => datos[i]) }));
+
+// El progreso se guarda en la tablet para que no se pierda al cerrar o recargar la página
+const completados = new Set();
+try { JSON.parse(localStorage.getItem("abecedario_completados") || "[]").forEach((n) => completados.add(n)); } catch (e) { /* sin almacenamiento */ }
+function guardarProgreso() { try { localStorage.setItem("abecedario_completados", JSON.stringify([...completados])); } catch (e) { /* sin almacenamiento */ } }
+
+/** Rompecabezas y Modo libre: siempre abiertos. Letras: el primero, y cada uno al completar el anterior. */
+const nivelDesbloqueado = (i) => modoLibre || NIVELES[i].tipo === "rompecabezas" || i === 0 || completados.has(i - 1);
+
+/** Cuadrícula de niveles. Devuelve el índice del nivel elegido (o -1 para volver al título). */
+async function pantallaSeleccionNiveles() {
+  const columnas = 3, ancho = 360, alto = 120, espacio = 40;
+  const x0 = W / 2 - (columnas * ancho + (columnas - 1) * espacio) / 2;
+  const bInicio = { x: 20, y: 20, w: 150, h: 50 };
+  const rects = NIVELES.map((_, i) => ({ x: x0 + (i % columnas) * (ancho + espacio), y: 225 + Math.floor(i / columnas) * (alto + espacio), w: ancho, h: alto }));
+
+  while (true) {
+    dibujarFondo();
+    texto("Elige un nivel", W / 2, 25, { size: 90, align: "center" });
+    boton(bInicio, "← Inicio", colorHover("azul_principal", bInicio), { size: 28, radio: 18 });
+    if (modoLibre) texto("Modo libre activado: sin vidas, todos los niveles disponibles", W / 2, 150, { size: 34, color: PALETA.azul_aviso, align: "center" });
+
+    NIVELES.forEach((nivel, i) => {
+      const r = rects[i], abierto = nivelDesbloqueado(i), hecho = completados.has(i);
+      boton(r, "", abierto ? colorHover("verde_activo", r) : PALETA.gris_bloqueado,
+            { radio: 20, borde: hecho ? 6 : 3, colorBorde: hecho ? PALETA.dorado_completado : "#000" });
+      const tinta = abierto ? PALETA.texto_claro : PALETA.texto_bloqueado;
+      const grande = anchoTexto(nivel.nombre, 40) <= r.w - 20;   // nombres largos: letra más chica
+      const estado = abierto && !hecho ? "" : !abierto ? "Bloqueado" : "¡Completado!";
+      texto(nivel.nombre, r.x + r.w / 2, r.y + r.h / 2 - (estado ? 14 : 0), { size: grande ? 40 : 28, color: tinta, align: "center", base: "middle" });
+      if (estado) texto(estado, r.x + r.w / 2, r.y + r.h / 2 + 28, { size: 26, color: tinta, align: "center", base: "middle" });
+      // Un ícono refuerza el estado además del color y el texto
+      if (!abierto) dibujarCandado(r.x + r.w - 28, r.y + 26, { tamaño: 26 });
+      else if (hecho) dibujarEstrella(r.x + r.w - 28, r.y + 26, { radio: 16, color: PALETA.dorado_completado });
+    });
+
+    for (const e of eventos()) {
+      if (e.t !== "down") continue;
+      if (dentro(bInicio, e)) return -1;   // volver al título (para cambiar Modo libre o Sonido)
+      const i = rects.findIndex((r, k) => nivelDesbloqueado(k) && dentro(r, e));
+      if (i >= 0) return i;
+    }
+    await frame();
+  }
+}
+
+// ============================
+// Pantalla de juego
+// ============================
+const RONDA_VACIA = { opciones: [], imagen: "", color: "#000", posiciones: [] };
+const FRASES_ANIMO = [["¡Vamos, tú puedes!", "animo_tu_puedes.mp3"], ["No te rindas", "animo_no_te_rindas.mp3"],
+                      ["Inténtalo otra vez", "animo_intentalo_otra_vez.mp3"]];
+
+/**
+ * Dibuja la pantalla de una ronda y devuelve sus botones [{r, ok}].
+ *  - ronda: la creada por juegoLetra (null = pantalla sin opciones, como la del final)
+ *  - marca: {imagen, r} para poner la palomita o la tachita sobre una opción
+ *  - estadoAvatar: "feliz", "triste", "animo" o "normal" (sin avatar)
+ */
+function mostrarPantalla(letra, ronda = null, marca = null, estadoAvatar = "normal") {
+  ronda = ronda || RONDA_VACIA;
+  dibujarFondo();
+  texto(letra, 55, 55, { size: 200 });                       // sombra
+  texto(letra, 50, 50, { size: 200, color: ronda.color });
+
+  // Progreso dentro del nivel: verde = superada, azul = actual, gris = falta
+  if (letra && datosNivel.length) {
+    const total = datosNivel.length, x0 = W / 2 - ((total - 1) * 38) / 2;
+    for (let i = 0; i < total; i++) {
+      ctx.fillStyle = PALETA[i < indice ? "verde_activo" : i === indice ? "azul_principal" : "gris_bloqueado"];
+      ctx.beginPath(); ctx.arc(x0 + i * 38, 36, 14, 0, Math.PI * 2); ctx.fill();
+      if (i === indice) { ctx.lineWidth = 3; ctx.strokeStyle = PALETA.texto_oscuro; ctx.stroke(); }
+    }
+  }
+
+  if (palabraMostrada) {
+    const x = W / 2;
+    texto(palabraMostrada, x + 3, 253, { size: 90, align: "center" });
+    texto(palabraMostrada, x, 250, { size: 90, color: azar(COLORES_LETRAS), align: "center" });
+  }
+
+  const botones = [];
+  ronda.opciones.forEach((nombre, i) => {
+    const c = imagenCircular(nombre), p = ronda.posiciones[i];
+    if (!c) return;
+    ctx.drawImage(c, p.x, p.y);
+    botones.push({ r: { x: p.x, y: p.y, w: 300, h: 300 }, ok: nombre === ronda.imagen });
+  });
+  if (marca) { const c = centro(marca.r); ctx.drawImage(marca.imagen, c.x - 125, c.y - 125, 250, 250); }
+
+  const avatar = avatares[estadoAvatar];
+  if (avatar) {
+    const xa = W / 2 - 125;
+    ctx.drawImage(avatar, xa, 20);
+    if (estadoAvatar === "animo") {   // burbuja con frase y su audio (sin esperar a que termine)
+      const [frase, audio] = azar(FRASES_ANIMO);
+      reproducirAudio(ruta("audios", audio), false);
+      dibujarBurbuja(frase, xa + 250 + 10, 100);
+    }
+  }
+
+  if (modoLibre) {   // infinito en vez de corazones
+    texto("∞", W - anchoTexto("∞", 50) - 30, 15, { size: 50, color: PALETA.azul_aviso });
+  } else {
+    for (let i = 0; i < vidas; i++) {
+      const cx = W - (i + 1) * 70 + 30;
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(cx, 50, 30, 0, Math.PI * 2); ctx.fill();
+      ctx.drawImage(img("corazon.png"), cx - 20, 30, 40, 40);
+    }
+  }
+  if (letra && datosNivel.length) dibujarBotonMenu();
+  return botones;
+}
+
+/** Prepara una ronda (imagen correcta + 2 distractores) y devuelve su objeto 'ronda'. */
+async function juegoLetra(info) {
+  palabraMostrada = "";
+  const correcta = azar(info.correctas);
+  const inicial = info.letra[0].toLowerCase();   // los distractores no deben empezar con la misma letra
+  const disponibles = IMAGENES_DISTRACCION.filter((i) => i !== correcta.imagen && !i.toLowerCase().startsWith(inicial));
+  const opciones = barajar([...muestra(disponibles, 2), correcta.imagen]);
+  const y = H / 2 + 30;
+  const posiciones = barajar([{ x: W / 4 - 150, y }, { x: W / 2 - 150, y }, { x: (3 * W) / 4 - 150, y }]);
+  const ronda = { opciones, imagen: correcta.imagen, palabra: correcta.palabra, color: azar(COLORES_LETRAS), posiciones };
+  rondaActual = ronda;
+  ronda.botones = mostrarPantalla(info.letra, ronda);
+  await hablar(`¿Cuál imagen empieza con la letra ${info.letra}?`);
+  return ronda;
+}
+
+// ============================
+// Minijuegos
+// ============================
+/** Repaso: arrastrar la imagen hasta la letra con la que empieza. */
+async function minijuegoArrastrar(letrasAprendidas, correcta, imagenCorrecta, palabra) {
+  const inicial = correcta[0].toUpperCase();   // "Ññ" -> "Ñ" (así se llaman los audios minijuego_Ñ_ñu.mp3)
+  const opciones = muestra(letrasAprendidas, 3);
+  if (!opciones.includes(correcta)) opciones[Math.floor(Math.random() * opciones.length)] = correcta;
+
+  const circulo = imagenCircular(imagenCorrecta, 200);
+  if (!circulo) return;
+  const rectImg = { x: 100, y: H / 2, w: 200, h: 200 };
+  const posiciones = barajar([{ x: 600, y: 190 }, { x: 870, y: 360 }, { x: 1090, y: 530 }]);   // en diagonal, sin encimarse
+  const letras = opciones.map((letra, i) => {
+    const w = anchoTexto(letra, 180), p = posiciones[i];
+    return { letra, r: { x: p.x - w / 2, y: p.y - 100, w, h: 200 } };
+  });
+
+  const dibujar = () => {
+    dibujarFondo();
+    for (const l of letras) {
+      const caja = inflar(l.r, 30, 30);
+      ctx.fillStyle = "#fff"; ctx.fillRect(caja.x, caja.y, caja.w, caja.h);
+      ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.strokeRect(caja.x, caja.y, caja.w, caja.h);
+      texto(l.letra, l.r.x + l.r.w / 2, l.r.y + l.r.h / 2, { size: 180, align: "center", base: "middle" });
+    }
+    ctx.drawImage(circulo, rectImg.x, rectImg.y);
+  };
+  dibujar();
+  await pausa(500);
+  if (!(await reproducirAudio(ruta("audios", `minijuego_${inicial}_${palabra}.mp3`)))) await hablar(`¿A qué letra corresponde ${palabra}? Arrástrala`);
+
+  let arrastrando = false, terminado = false;
+  while (!terminado) {
+    for (const e of eventos()) {
+      if (e.t === "down" && dentro(rectImg, e)) arrastrando = true;
+      else if (e.t === "up") {
+        arrastrando = false;
+        for (const l of letras) {
+          if (!choca(rectImg, l.r)) continue;
+          if (l.letra === correcta) {
+            if (!(await reproducirAudio(ruta("audios", "muy_bien.mp3")))) await hablar("¡Muy bien!");
+            terminado = true;
+          } else { rectImg.x = 100; rectImg.y = H / 2; await hablar("Intenta otra vez"); }   // la imagen vuelve a su sitio
+          break;
+        }
+        if (terminado) break;
+      } else if (e.t === "move" && arrastrando) { rectImg.x = e.x - rectImg.w / 2; rectImg.y = e.y - rectImg.h / 2; }
+    }
+    dibujar();
+    await frame();
+  }
+}
+
+/** Rompecabezas: la letra se parte en 2 piezas (arriba y abajo) que el jugador arma. Sin vidas ni tiempo límite. */
+async function minijuegoRompecabezas(infoLetra) {
+  const letra = infoLetra.letra, objeto = azar(infoLetra.correctas);
+  const ancho = 260, alto = 150;   // tamaño de cada pieza; la letra completa mide ancho x (2 * alto)
+
+  // La letra se dibuja en un lienzo aparte para poder partirla en dos
+  const [completa, g] = lienzoNuevo(ancho, alto * 2);
+  let size = 180;
+  ctx.font = `700 ${size}px ${FUENTE}`;
+  while (ctx.measureText(letra).width > ancho - 20 && size > 60) { size -= 10; ctx.font = `700 ${size}px ${FUENTE}`; }
+  g.font = `700 ${size}px ${FUENTE}`; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = azar(COLORES_LETRAS);
+  g.fillText(letra, ancho / 2, alto);
+
+  const x0 = W / 2 - ancho / 2, y0 = H / 2 - alto;                    // posición final, al centro
+  const origenes = [{ x: 150, y: H - 300 }, { x: W - 150 - ancho, y: 150 }];   // piezas revueltas a los lados
+  const piezas = [0, 1].map((k) => ({ k, r: { x: origenes[k].x, y: origenes[k].y, w: ancho, h: alto },
+                                      objetivo: { x: x0, y: y0 + k * alto, w: ancho, h: alto }, colocada: false }));
+  const apoyo = imagenCircular(objeto.imagen, 160);
+
+  const dibujar = () => {
+    dibujarFondo();
+    texto("Arrastra las piezas para armar la letra", W / 2, 60, { size: 40, align: "center" });
+    if (apoyo) ctx.drawImage(apoyo, 40, H / 2 - 80);
+    ctx.lineWidth = 4; ctx.strokeStyle = "#fff";
+    for (const p of piezas) { rectRedondo(p.objetivo, 10); ctx.stroke(); }
+    for (const p of piezas) ctx.drawImage(completa, 0, p.k * alto, ancho, alto, p.r.x, p.r.y, ancho, alto);
+    dibujarBotonMenu();
+  };
+  dibujar();
+  await pausa(400);
+  await hablar(`Arma la letra ${letra} uniendo las dos piezas`);
+
+  let enMano = null;
+  while (!piezas.every((p) => p.colocada)) {
+    for (const e of eventos()) {
+      if (e.t === "down") {
+        if (dentro(BOTON_MENU, e)) return false;
+        enMano = piezas.find((p) => !p.colocada && dentro(p.r, e)) || null;
+      } else if (e.t === "up" && enMano) {
+        if (choca(enMano.r, inflar(enMano.objetivo, 60, 60))) {   // tolerancia de 60 px
+          enMano.r.x = enMano.objetivo.x; enMano.r.y = enMano.objetivo.y; enMano.colocada = true;
+          efecto("correcto.wav");
+        }
+        enMano = null;
+      } else if (e.t === "move" && enMano) { enMano.r.x = e.x - ancho / 2; enMano.r.y = e.y - alto / 2; }
+      else if (e.t === "esc") return false;
+    }
+    dibujar();
+    await frame();
+  }
+  if (!(await reproducirAudio(ruta("audios", "muy_bien.mp3")))) await hablar(`¡Excelente! Armaste la letra ${letra}`);
+  await pausa(1200);
+  return true;
+}
+
+// ============================
+// Flujo de un nivel
+// ============================
+/** Marca el nivel como completado y lo celebra (con mensaje especial al completar todos). */
+async function terminarNivel(idx) {
+  completados.add(idx);
+  guardarProgreso();
+  if (completados.size === NIVELES.length) {
+    await hablar("¡Felicidades! Has terminado el abecedario.");
+    mostrarPantalla("", null, null, "feliz");
+    await pausa(2500);
+  } else await hablar("¡Nivel completado!");
+}
+
+/** Juega un nivel de letras. Devuelve true si el jugador eligió 'Reintentar' al quedarse sin vidas. */
+async function jugarNivel(idx) {
+  datosNivel = NIVELES[idx].datos;
+  vidas = 5; indice = 0;
+  let ronda = await juegoLetra(datosNivel[0]);
+
+  while (true) {
+    for (const e of eventos()) {
+      if (e.t === "esc") return false;
+      if (e.t !== "down") continue;
+      if (dentro(BOTON_MENU, e)) return false;
+      const clic = ronda.botones.find((b) => dentro(b.r, e));
+      if (!clic) continue;
+      const letra = datosNivel[indice].letra;
+
+      if (clic.ok) {
+        efecto("correcto.wav");
+        palabraMostrada = ronda.palabra;
+        mostrarPantalla(letra, ronda, { imagen: PALOMITA, r: clic.r }, "feliz");   // se ve al instante
+        await hablar(`¡Correcto! ${letra} de ${ronda.palabra}`);
+        await pausa(1500);
+        indice++;
+        if (indice < datosNivel.length) { ronda = await juegoLetra(datosNivel[indice]); break; }
+        // Última letra: minijuego de repaso con una imagen del nivel y se termina
+        const info = azar(datosNivel), objeto = azar(info.correctas);
+        await minijuegoArrastrar(datosNivel.map((d) => d.letra), info.letra, objeto.imagen, objeto.palabra);
+        await terminarNivel(idx);
+        return false;
+      }
+
+      efecto("error.wav");
+      if (!modoLibre) vidas--;
+      if (vidas <= 0) {
+        mostrarPantalla(letra, ronda, null, "triste");
+        await hablar("¡Se acabaron tus vidas!");
+        await pausa(1500);
+        return (await pantallaFinJuego()) === "reintentar";
+      }
+      mostrarPantalla(letra, ronda, { imagen: TACHITA, r: clic.r }, "triste");   // se ve al instante
+      await hablar("Intenta otra vez");
+      await pausa(1200);
+      ronda.botones = mostrarPantalla(letra, ronda, null, "animo");
+      await pausa(1500);
+      break;
+    }
+    await frame();
+  }
+}
+
+// ============================
+// Arranque y bucle principal
+// ============================
+let PALOMITA = null, TACHITA = null;
+
+async function cargarTodo() {
+  const nombres = ["Fondo.png", "Logo.png", "palomita.png", "tachita.png", "corazon.png",
+                   "avatar_feliz.png", "avatar_triste.png", "avatar_animo.png",
+                   ...IMAGENES_DISTRACCION, ...datos.flatMap((d) => d.correctas.map((c) => c.imagen))];
+  let listos = 0;
+  ctx.fillStyle = "#a8dcf0"; ctx.fillRect(0, 0, W, H);
+  await Promise.all([document.fonts.load('700 40px "Baloo2"'), document.fonts.load('400 40px "Baloo2"'),
+    ...nombres.map((n) => cargarImg(n).then(() => {
+      listos++;
+      ctx.fillStyle = "#a8dcf0"; ctx.fillRect(0, 0, W, H);
+      texto("Cargando…", W / 2, H / 2 - 40, { size: 60, color: PALETA.texto_oscuro, align: "center", base: "middle" });
+      ctx.fillStyle = "#fff"; ctx.fillRect(W / 2 - 250, H / 2 + 20, 500, 24);
+      ctx.fillStyle = PALETA.azul_principal; ctx.fillRect(W / 2 - 250, H / 2 + 20, 500 * listos / nombres.length, 24);
+    }))]);
+  PALOMITA = img("palomita.png"); TACHITA = img("tachita.png");
+  prepararAvatares();
+}
+
+async function main() {
+  await cargarTodo();
+  let reintentar = null;   // si el jugador eligió "Reintentar", índice del nivel a repetir sin pasar por los menús
+  await pantallaInicio();
+  await pantallaInstrucciones();
+  while (true) {
+    let idx;
+    if (reintentar === null) {
+      idx = await pantallaSeleccionNiveles();
+      if (idx < 0) { await pantallaInicio(); continue; }
+    } else { idx = reintentar; reintentar = null; }
+
+    if (NIVELES[idx].tipo === "rompecabezas") {
+      let completo = true;
+      for (const info of NIVELES[idx].datos) if (!(await minijuegoRompecabezas(info))) { completo = false; break; }
+      if (completo) await terminarNivel(idx);
+    } else if (await jugarNivel(idx)) reintentar = idx;
+  }
+}
+
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* sin modo sin conexión */ });
+}
+window.__abecedario = { get ronda() { return rondaActual; }, get estado() { return { vidas, indice, modoLibre, audioActivado, completados: [...completados] }; } };
+main();
