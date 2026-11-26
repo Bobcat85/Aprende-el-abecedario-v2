@@ -12,7 +12,7 @@ import sys
 import time
 
 import voz
-from respuestas import PALABRAS, evaluar
+from respuestas import PALABRAS, PALABRAS_DISTRACTORAS, evaluar
 
 ARGS = [a.lower() for a in sys.argv[1:]]
 SIMULADO = any(a.startswith("sim") for a in ARGS)
@@ -52,13 +52,11 @@ def main():
         print("Problema con el micrófono:", voz.error_inicio())
         return
 
-    todas_las = [w for ws in PALABRAS.values() for w in ws]
     resultados = []
     pruebas = lista_de_pruebas()
 
     for n, (letra, palabra) in enumerate(pruebas, 1):
-        otras = [w for w in todas_las if w not in PALABRAS[letra]]
-        opciones = [palabra] + random.sample(otras, 2)
+        opciones = [palabra] + random.sample(PALABRAS_DISTRACTORAS, 2)   # como en el juego
         random.shuffle(opciones)
 
         while True:
