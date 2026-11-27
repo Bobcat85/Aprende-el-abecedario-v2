@@ -5,6 +5,3 @@ Scripts/
 pyvenv.cfg
 __pycache__/
 *.pyc
-.venv/
-__pycache__/
-prueba_micro.wav
