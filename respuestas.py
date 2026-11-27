@@ -33,6 +33,12 @@ PALABRAS = {
     "Z": ["zapato", "zorro", "zanahoria"],
 }
 
+# Imágenes que el juego usa como distractoras (las que no empiezan con "X_" en assets/imagenes)
+PALABRAS_DISTRACTORAS = [
+    "arcoíris", "barco", "cama", "disco", "escoba", "fuego", "guante", "hielo", "iglú", "jaguar",
+    "karate", "libro", "muñeca", "nuez", "oso", "pato", "pelota", "rana", "sandía", "teléfono",
+]
+
 # Cómo se dice (y cómo suele transcribir Google) el nombre de cada letra.
 # B y V se pronuncian igual en México, así que cada una acepta los dos nombres.
 NOMBRES_LETRA = {
